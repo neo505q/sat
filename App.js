@@ -5,6 +5,20 @@ import EarthViewer from './components/EarthViewer';
 const REFRESH_INTERVAL_MS = 15000;
 const RISK_REFRESH_INTERVAL_MS = 3000;
 
+function getDockedPanelSize() {
+  return { width: 52, height: 52 };
+}
+
+function measureElementSize(ref, fallbackWidth, fallbackHeight) {
+  if (ref?.current) {
+    const rect = ref.current.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      return { width: rect.width, height: rect.height };
+    }
+  }
+  return { width: fallbackWidth, height: fallbackHeight };
+}
+
 function getEdgeZone(x, y, width, height) {
   const EDGE = 60;
   const BOTTOM = 130;
@@ -15,14 +29,16 @@ function getEdgeZone(x, y, width, height) {
 }
 
 function getDockedStyle(zone, position) {
+  const { width: iconW, height: iconH } = getDockedPanelSize();
+  const bottomLimit = getBottomDragLimit();
   if (zone === 'left') {
-    return { left: '0px', top: `${Math.min(Math.max(position.y, 76), window.innerHeight - 60)}px` };
+    return { left: '0px', top: `${Math.min(Math.max(position.y, 76), bottomLimit - iconH)}px` };
   }
   if (zone === 'right') {
-    return { left: 'auto', right: '0px', top: `${Math.min(Math.max(position.y, 76), window.innerHeight - 60)}px` };
+    return { left: 'auto', right: '0px', top: `${Math.min(Math.max(position.y, 76), bottomLimit - iconH)}px` };
   }
   if (zone === 'bottom') {
-    return { left: `${Math.min(Math.max(position.x, 12), window.innerWidth - 220)}px`, top: 'auto', bottom: '12px' };
+    return { left: `${Math.min(Math.max(position.x, 12), window.innerWidth - iconW - 170)}px`, top: 'auto', bottom: '12px' };
   }
   return null;
 }
@@ -120,6 +136,50 @@ function useFloatingPanel(storageKey, fallback, panelWidth = 390, panelHeight = 
   return { position, setPosition, dragging, handlePointerDown };
 }
 
+function useDockedAxisDrag(zone, position, setPosition) {
+  const positionRef = useRef(position);
+  positionRef.current = position;
+
+  return useCallback((event, onExpand) => {
+    if (event.button !== 0) return;
+    if (zone === 'default') {
+      onExpand();
+      return;
+    }
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const origin = positionRef.current;
+    let moved = false;
+
+    const handleMove = (moveEvent) => {
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+
+      const { width: iconW, height: iconH } = getDockedPanelSize();
+      if (zone === 'left' || zone === 'right') {
+        const minY = 76;
+        const maxY = Math.max(minY, getBottomDragLimit() - iconH);
+        setPosition({ ...origin, y: Math.min(maxY, Math.max(minY, origin.y + dy)) });
+      } else if (zone === 'bottom') {
+        const minX = 12;
+        const maxX = Math.max(minX, window.innerWidth - iconW - 170);
+        setPosition({ ...origin, x: Math.min(maxX, Math.max(minX, origin.x + dx)) });
+      }
+    };
+
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      if (!moved) onExpand();
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  }, [zone, setPosition]);
+}
+
 function App() {
   const [data, setData] = useState(null);
   const [alerts, setAlerts] = useState([]);
@@ -207,6 +267,10 @@ function App() {
     380,
     560
   );
+
+  const selectedDockedDrag = useDockedAxisDrag(selectedMinimizeZone, selectedPanel.position, selectedPanel.setPosition);
+  const riskDockedDrag = useDockedAxisDrag(riskMinimizeZone, riskPanel.position, riskPanel.setPosition);
+  const aiDockedDrag = useDockedAxisDrag(aiMinimizeZone, aiPanelPosition, setAiPanelPosition);
 
   const recenterPanel = useCallback((panel) => {
     const centerX = (width) => Math.max(12, window.innerWidth / 2 - width / 2);
@@ -521,12 +585,7 @@ function App() {
             aria-label="Selected object panel"
               >
                    {selectedHidden ? null : selectedCollapsed ? (
-                     <button
-                       className="collapsed-panel-button"
-                       onPointerDown={selectedPanel.handlePointerDown}
-                       onClick={() => setSelectedCollapsed(false)}
-                       title="Expand selected object panel"
-                     >
+                     <button className="collapsed-panel-button" onPointerDown={(event) => selectedDockedDrag(event, () => setSelectedCollapsed(false))} title="Expand selected object panel">
                        <span className="panel-icon">⌁</span>
                        {selectedMinimizeZone === 'bottom'
                          ? <span className="collapsed-panel-label">Selected Object</span>
@@ -542,7 +601,7 @@ function App() {
                          <button
                            className="panel-icon-button"
                            onClick={() => {
-                             setSelectedMinimizeZone(getEdgeZone(selectedPanel.position.x, selectedPanel.position.y, 390, 560));
+                             setSelectedMinimizeZone(getEdgeZone(selectedPanel.position.x, selectedPanel.position.y, 294, 560));
                              setSelectedCollapsed(true);
                            }}
                            title="Minimize"
@@ -588,12 +647,7 @@ function App() {
             aria-label="Conjunction risk panel"
           >
                  {riskHidden ? null : riskCollapsed ? (
-                   <button
-                     className="collapsed-panel-button risk-collapsed-button"
-                     onPointerDown={riskPanel.handlePointerDown}
-                     onClick={() => setRiskCollapsed(false)}
-                     title="Expand conjunction risk panel"
-                   >
+                                                  <button className="collapsed-panel-button risk-collapsed-button" onPointerDown={(event) => riskDockedDrag(event, () => setRiskCollapsed(false))} title="Expand conjunction risk panel">
                      <span className="panel-icon">!</span>
                      {riskMinimizeZone === 'bottom'
                        ? <span className="collapsed-panel-label">Conjunction Risk</span>
@@ -607,7 +661,7 @@ function App() {
                        <button
                          className="panel-icon-button"
                          onClick={() => {
-                           setRiskMinimizeZone(getEdgeZone(riskPanel.position.x, riskPanel.position.y, 390, 560));
+                           setRiskMinimizeZone(getEdgeZone(riskPanel.position.x, riskPanel.position.y, 380, 560));
                            setRiskCollapsed(true);
                          }}
                          title="Minimize"
@@ -701,12 +755,20 @@ function App() {
       <div className="map-status-pill glass-surface"><span className="live-dot" /> MAP LIVE <span className="status-divider" /> {loading ? 'UPDATING OBJECTS' : 'PROPAGATION READY'}</div>
        
           {!queueHidden && (
-          <section className={`conjunction-queue glass-surface ${queueOpen ? 'is-open' : 'is-closed'}`} aria-label="Conjunction queue">
-                    <div className="queue-header">
-                      <span className="queue-title"><span className="queue-icon">≡</span> CONJUNCTION QUEUE <span className="alert-count">{alerts.length}</span></span>
-                      <button type="button" className="panel-icon-button" onClick={() => setQueueOpen((open) => !open)} title={queueOpen ? 'Minimize' : 'Expand'}>{queueOpen ? '−' : '+'}</button>
-                      <button type="button" className="panel-icon-button panel-close-button" onClick={() => setQueueHidden(true)} title="Close">✕</button>
-                    </div>
+               <section
+                 className={`conjunction-queue glass-surface ${queueOpen ? 'is-open' : 'is-closed'}`}
+                 aria-label="Conjunction queue"
+                 onClick={() => { if (!queueOpen) setQueueOpen(true); }}
+               >
+                         <div className="queue-header">
+                           <span className="queue-title"><span className="queue-icon">≡</span> CONJUNCTION QUEUE <span className="alert-count">{alerts.length}</span></span>
+                           <div className="queue-header-actions">
+                             {queueOpen && (
+                               <button type="button" className="panel-icon-button" onClick={(event) => { event.stopPropagation(); setQueueOpen(false); }} title="Minimize">−</button>
+                             )}
+                             <button type="button" className="panel-icon-button panel-close-button" onClick={(event) => { event.stopPropagation(); setQueueHidden(true); }} title="Close">✕</button>
+                           </div>
+                         </div>
         {queueOpen && (
           <div className="queue-body">
             {alerts.slice(0, 5).map((alert) => {
@@ -751,7 +813,7 @@ function App() {
                            ? getDockedStyle(aiMinimizeZone, aiPanelPosition)
                            : { left: `${aiPanelPosition.x}px`, top: `${aiPanelPosition.y}px` }),
                        }}
-                       onClick={() => setAiCollapsed(false)}
+                       onPointerDown={(event) => aiDockedDrag(event, () => setAiCollapsed(false))}
                        title="Expand AI validation panel"
                      >
                        <span className="panel-icon">✦</span>
